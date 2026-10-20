@@ -2,6 +2,8 @@
 import logging
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -10,6 +12,7 @@ DIR_DATA = os.path.join(RAIZ, "data")
 DIR_SIM_COD = os.path.join(RAIZ, "sim", "codificacion")
 DIR_SIM_DEC = os.path.join(RAIZ, "sim", "decodificacion")
 DIR_SIM_LOGS = os.path.join(RAIZ, "sim", "logs")
+SCRIPT_CODIFICADOR = os.path.join(RAIZ, "huffman_codificador.py")
 
 # Archivos del instructivo (subcarpeta de data/, nombre)
 ARCHIVOS_REALES = [
@@ -77,3 +80,65 @@ class LoggedTestCase(unittest.TestCase):
         with open(ruta, "wb") as f:
             f.write(contenido)
         return ruta
+
+    def codificar(self, nombre, contenido, *extra):
+        """Escribe 'contenido' en un temporal y corre el codificador sobre él.
+
+        Devuelve (proceso, ruta_entrada, métricas_parseadas).
+        """
+        ruta = self.escribir_temporal(nombre, contenido)
+        proc = ejecutar_codificador(ruta, *extra)
+        LOG.info("    codificador -> returncode=%d", proc.returncode)
+        if proc.returncode != 0:
+            self.fail("el codificador terminó con código %d:\n%s" % (proc.returncode, proc.stderr))
+        return proc, ruta, parsear_salida(proc.stdout)
+
+
+# ----------------------------------------------------------------------------
+# huffman_codificador.py se ejecuta como proceso: el script corre todo al
+# importarse y escribe .huffman/.diccionario.csv junto al archivo de entrada.
+# ----------------------------------------------------------------------------
+_ETIQUETAS = {
+    "N": "Símbolos totales (N)",
+    "M": "Símbolos distintos (M)",
+    "H": "Entropía H(X)",
+    "H_max": "Entropía máxima log2(M)",
+    "L": "Longitud media Huffman L",
+    "var": "Varianza del código Huffman",
+    "eta_original_pct": "Eficiencia código original",
+    "eta_huffman_pct": "Eficiencia código Huffman",
+    "original": "Tamaño original",
+    "bits_utiles": "Bits Huffman útiles",
+    "comprimido": "Tamaño comprimido (.huffman)",
+    "diccionario": "Tamaño diccionario (.csv)",
+    "tasa": "Tasa de compresión",
+    "tasa_total": "Tasa incl. diccionario",
+    "ahorro_pct": "Ahorro de espacio",
+}
+
+
+def ejecutar_codificador(ruta_entrada, *extra):
+    """Corre `python3 huffman_codificador.py -i <ruta> [extra]` y devuelve el proceso."""
+    entorno = dict(os.environ, PYTHONIOENCODING="utf-8")
+    return subprocess.run([sys.executable, SCRIPT_CODIFICADOR, "-i", ruta_entrada, *extra],
+                          capture_output=True, text=True, encoding="utf-8",
+                          cwd=RAIZ, env=entorno)
+
+
+def ejecutar_codificador_sin_i(*args):
+    entorno = dict(os.environ, PYTHONIOENCODING="utf-8")
+    return subprocess.run([sys.executable, SCRIPT_CODIFICADOR, *args],
+                          capture_output=True, text=True, encoding="utf-8",
+                          cwd=RAIZ, env=entorno)
+
+
+def parsear_salida(stdout):
+    """Extrae las métricas impresas por el codificador a un diccionario de floats."""
+    res = {}
+    for linea in stdout.splitlines():
+        for clave, etiqueta in _ETIQUETAS.items():
+            if linea.startswith(etiqueta):
+                res[clave] = float(linea.split(":", 1)[1].split()[0])
+        if linea.startswith("Límite teórico"):
+            res["tasa_teorica"] = float(linea.split("tasa máx.")[1].split()[0])
+    return res
