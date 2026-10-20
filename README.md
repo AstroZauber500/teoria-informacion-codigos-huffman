@@ -9,7 +9,7 @@ Implementación en Python de un **codificador y decodificador de Huffman** para 
 ├── huffman_decodificador.py  # Decodificador: reconstrucción y verificación de integridad
 ├── run_tests.py              # Ejecutor de la suite de pruebas
 ├── instructivo.md            # Instructivo del proyecto
-├── data/                     # Archivos de prueba (texto y binarios)
+├── data/                     # Archivos de prueba (texto/, binarios/, imagenes/)
 ├── sim/                      # Salidas de simulación (codificación, decodificación, logs)
 ├── reporte/                  # Reporte final
 └── tests/                    # Suite de pruebas unitarias
@@ -20,7 +20,7 @@ Implementación en Python de un **codificador y decodificador de Huffman** para 
 Codificar un archivo:
 
 ```powershell
-python huffman_codificador.py -i data/solo_abc_cien.txt
+python huffman_codificador.py -i data/texto/solo_abc_cien.txt
 ```
 
 Decodificar un archivo comprimido:

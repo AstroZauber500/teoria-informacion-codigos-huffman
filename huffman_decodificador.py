@@ -14,9 +14,7 @@ import hashlib
 import os
 import sys
 
-# ----------------------------------------------------------------------------
 # Constantes (deben coincidir con las del codificador; las valida test_roundtrip)
-# ----------------------------------------------------------------------------
 SUFIJO_HUFFMAN = ".huffman"
 SUFIJO_DICCIONARIO = ".diccionario.csv"
 PREFIJO_RECUPERADO = "recovered_"
@@ -24,9 +22,7 @@ DIR_SALIDA_DEFECTO = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   "sim", "decodificacion")
 
 
-# ----------------------------------------------------------------------------
 # Árbol (misma estructura que huffman_base.py)
-# ----------------------------------------------------------------------------
 class NodeTree(object):
     def __init__(self, left=None, right=None):
         self.left = left
@@ -60,9 +56,7 @@ def insert_in_tree(raiz, ruta, valor):
             insert_in_tree(raiz.right, ruta[1:], valor)
 
 
-# ----------------------------------------------------------------------------
 # Pasos de la descompresión
-# ----------------------------------------------------------------------------
 def rutas_derivadas(file_huffman, out_dir=DIR_SALIDA_DEFECTO):
     """Devuelve (ruta_diccionario, recovered_path) a partir del .huffman."""
     carpeta, nombre = os.path.split(os.path.normpath(file_huffman))
@@ -178,9 +172,7 @@ def procesar(file_huffman, out_dir=DIR_SALIDA_DEFECTO, original=None):
     return resultado
 
 
-# ----------------------------------------------------------------------------
 # Presentación y línea de comandos
-# ----------------------------------------------------------------------------
 def imprimir_reporte(r):
     print("====== Descompresión:", os.path.basename(r["file_huffman"]), "======")
     print("Diccionario leído                  : %s (%d símbolos)"
