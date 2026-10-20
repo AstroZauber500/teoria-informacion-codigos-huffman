@@ -7,6 +7,21 @@ Lee <archivo.huffman> y su <nombre>.diccionario.csv (en la misma carpeta),
 reconstruye el árbol, decodifica y escribe recovered_<nombre> en la carpeta de
 salida (por defecto sim/decodificacion/). Con -r compara bit a bit contra el
 original (instructivo 2.4.2).
+
+Flujo de ejecución (sección 2.4 del reporte):
+    1.  parse_args lee -i/-r/-o/-h, valida la entrada y configura las rutas.
+    2.  procesar llama a rutas_derivadas para deducir el .csv y la salida.
+    3.  leer_diccionario extrae bits_utiles y los códigos (con validaciones).
+    4.  construir_arbol_desde_diccionario reconstruye el árbol en memoria.
+    5.  procesar lee todos los bytes del .huffman.
+    6.  bytes_a_bits los convierte a texto y trunca exactamente en bits_utiles.
+    7.  decodificar_bits recorre el árbol; las hojas se detectan con
+        type(nodo) is int y cada hoja emite un byte.
+    8.  procesar crea la carpeta de salida y escribe el archivo recuperado.
+    9.  Si se pasó -r, la verificación es comparación DIRECTA byte a byte;
+        el SHA-256 solo se imprime como evidencia.
+    10. imprimir_reporte muestra tamaños, hashes y estado; main retorna 0,
+        o 1 si la comparación falló.
 """
 import csv
 import getopt
@@ -24,6 +39,12 @@ DIR_SALIDA_DEFECTO = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # Árbol (misma estructura que huffman_base.py)
 class NodeTree(object):
+    """Nodo INTERNO del árbol binario de Huffman.
+
+    Importante: un NodeTree NUNCA es una hoja. Las hojas son los enteros
+    (los bytes originales, 0-255) que se guardan directamente en los
+    atributos `left` o `right` de un nodo interno.
+    """
     def __init__(self, left=None, right=None):
         self.left = left
         self.right = right
@@ -39,7 +60,12 @@ class NodeTree(object):
 
 
 def insert_in_tree(raiz, ruta, valor):
-    """Inserta 'valor' siguiendo 'ruta' ('0' izquierda, '1' derecha)."""
+    """Inserta 'valor' (hoja entera) siguiendo la 'ruta' del código binario.
+
+    Recorre el código binario (ej. '101') sobre el árbol: '0' baja a la
+    izquierda y '1' a la derecha. Si en el camino no existe el nodo interno,
+    lo crea. Al final del camino inserta el símbolo entero (la hoja).
+    """
     if len(ruta) == 1:
         if ruta == '0':
             raiz.left = valor
@@ -58,7 +84,15 @@ def insert_in_tree(raiz, ruta, valor):
 
 # Pasos de la descompresión
 def rutas_derivadas(file_huffman, out_dir=DIR_SALIDA_DEFECTO):
-    """Devuelve (ruta_diccionario, recovered_path) a partir del .huffman."""
+    """Devuelve (ruta_diccionario, recovered_path) a partir del .huffman.
+
+    Valida que el archivo termine en '.huffman' y calcula las rutas del
+    diccionario (.diccionario.csv, en la misma carpeta) y del archivo de
+    salida (recovered_<nombre> en out_dir).
+
+    Nota: esta función SOLO calcula las rutas; la carpeta de salida se
+    crea físicamente en la función procesar().
+    """
     carpeta, nombre = os.path.split(os.path.normpath(file_huffman))
     if not nombre.endswith(SUFIJO_HUFFMAN):
         raise ValueError("El archivo comprimido debe terminar en '%s': %s"
@@ -70,7 +104,15 @@ def rutas_derivadas(file_huffman, out_dir=DIR_SALIDA_DEFECTO):
 
 
 def leer_diccionario(ruta):
-    """Lee el CSV. Devuelve (bits_utiles, {símbolo: código})."""
+    """Lee el CSV. Devuelve (bits_utiles, {símbolo: código}).
+
+    Aplica validaciones estrictas (lanza ValueError claro si algo falla):
+      - Exige que la primera fila tenga la forma '<n>,bits'.
+      - Ignora filas en blanco.
+      - Cada símbolo debe ser un entero en [0, 255].
+      - Verifica que haya al menos un código y que ningún código esté vacío
+        ni contenga caracteres distintos a '0' o '1'.
+    """
     with open(ruta, 'r', newline='') as csvfile:
         filas = [fila for fila in csv.reader(csvfile) if fila]
     if not filas:
@@ -92,7 +134,15 @@ def leer_diccionario(ruta):
 
 
 def construir_arbol_desde_diccionario(codigos):
-    """Reconstruye el árbol de Huffman con insert_in_tree."""
+    """Reconstruye el árbol de Huffman completo.
+
+    Itera sobre el diccionario leído del CSV y llama a insert_in_tree para
+    cada par (símbolo, código), reconstruyendo así el árbol binario.
+
+    Caso esquina (h_cero.bin): con un solo símbolo, el árbol queda con la
+    raíz y una única hoja en `left` (código '0'). Cada bit 0 leído produce
+    un byte en la salida, funcionando correctamente.
+    """
     raiz = NodeTree(None, None)
     for simbolo, codigo in codigos.items():
         insert_in_tree(raiz, codigo, simbolo)
@@ -100,7 +150,17 @@ def construir_arbol_desde_diccionario(codigos):
 
 
 def bytes_a_bits(datos, bits_utiles):
-    """Convierte bytes a cadena de bits y descarta el relleno (padding)."""
+    """Convierte bytes a cadena de bits y descarta el relleno (padding).
+
+    Importante: CORTA la cadena conservando exactamente los primeros
+    `bits_utiles` bits. NO "elimina ceros del final", lo cual destruiría
+    datos si el mensaje real termina en ceros.
+
+    Validaciones (lanza ValueError):
+      - bits_utiles no puede ser mayor que el total de bits disponibles.
+      - No pueden sobrar 8 bits o más (detectaría archivos truncados o
+        un CSV incorrecto, pues el relleno legítimo es de 0 a 7 bits).
+    """
     disponibles = len(datos) * 8
     if bits_utiles > disponibles:
         raise ValueError("El diccionario indica %d bits pero el archivo solo tiene %d"
@@ -112,7 +172,15 @@ def bytes_a_bits(datos, bits_utiles):
 
 
 def decodificar_bits(bits, raiz):
-    """Recorre el árbol bit a bit; al llegar a una hoja emite el símbolo."""
+    """Recorre el árbol bit a bit; al llegar a una hoja emite el símbolo.
+
+    Núcleo de la decodificación: si lee un '0' va a la izquierda, si lee un
+    '1' va a la derecha. Cuando llega a un nodo que es un entero
+    (type(nodo) is int), guarda ese byte en la salida y regresa a la raíz.
+
+    Lanza ValueError si la secuencia de bits no corresponde a ningún código
+    (llega a None) o si el mensaje termina a mitad de un código.
+    """
     salida = bytearray()
     nodo = raiz
     for bit in bits:
@@ -128,16 +196,31 @@ def decodificar_bits(bits, raiz):
 
 
 def hash_sha256(datos):
+    """Calcula el SHA-256 SOLO como evidencia para el reporte.
+
+    El hash se calcula e imprime, pero NO es el criterio que decide si la
+    verificación es exitosa (esa decisión es de verificar_integridad).
+    """
     return hashlib.sha256(datos).hexdigest()
 
 
 def verificar_integridad(original, recuperado):
-    """True si ambos son idénticos byte a byte."""
+    """True si ambos son idénticos byte a byte.
+
+    Importante: la verificación de integridad se realiza EXCLUSIVAMENTE
+    mediante comparación directa byte a byte (original == recuperado).
+    """
     return original == recuperado
 
 
 def procesar(file_huffman, out_dir=DIR_SALIDA_DEFECTO, original=None):
-    """Descomprime y escribe recovered_path. Si se da 'original', verifica."""
+    """Orquesta el flujo completo de descompresión.
+
+    Deduce rutas, lee el diccionario, reconstruye el árbol, lee el .huffman,
+    convierte a bits y decodifica. Luego CREA la carpeta de salida
+    (os.makedirs), escribe el archivo final (recovered_path) y retorna las
+    estadísticas. Si se da 'original', además verifica la integridad.
+    """
     ruta_diccionario, recovered_path = rutas_derivadas(file_huffman, out_dir)
     bits_utiles, codigos = leer_diccionario(ruta_diccionario)
     raiz = construir_arbol_desde_diccionario(codigos)
@@ -174,6 +257,12 @@ def procesar(file_huffman, out_dir=DIR_SALIDA_DEFECTO, original=None):
 
 # Presentación y línea de comandos
 def imprimir_reporte(r):
+    """Muestra en consola tamaños, hashes SHA-256 y el estado final.
+
+    El renglón de verificación (COINCIDE / NO COINCIDE) refleja la
+    comparación directa byte a byte; el SHA-256 se imprime solo como
+    evidencia para el reporte.
+    """
     print("====== Descompresión:", os.path.basename(r["file_huffman"]), "======")
     print("Diccionario leído                  : %s (%d símbolos)"
           % (r["ruta_diccionario"], r["simbolos"]))
@@ -192,7 +281,12 @@ def imprimir_reporte(r):
 
 
 def parse_args(argv):
-    """Lee -i (.huffman), -r (original), -o (directorio de salida) y -h."""
+    """Lee -i (.huffman), -r (original), -o (directorio de salida) y -h.
+
+    Atiende -h (ayuda) y opciones inválidas o falta de -i saliendo con
+    código 2. Establece la carpeta sim/decodificacion/ como salida por
+    defecto cuando no se pasa -o.
+    """
     arg_help = ("{0} -i <archivo.huffman> [-r <original>] [-o <directorio_salida>]"
                 .format(argv[0]))
     try:
@@ -219,6 +313,11 @@ def parse_args(argv):
 
 
 def main(argv):
+    """Punto de entrada: parsea argumentos, procesa e imprime el reporte.
+
+    Retorna 0 si todo salió bien (o si no se pidió verificación), y 1 si
+    la comparación byte a byte contra el original falló.
+    """
     config = parse_args(argv)
     resultado = procesar(config["input"], config["output"], config["original"])
     imprimir_reporte(resultado)
